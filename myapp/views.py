@@ -7,7 +7,6 @@ from rest_framework.response import Response
 from django.shortcuts import redirect
 from django.http import HttpResponseRedirect,HttpResponseNotFound
 
-
 url_map = {}
 
 DEFAULT_TTL = 120
@@ -20,7 +19,7 @@ def generate_random_alias(length=8):
 def check_alias_expired(alias):
     if alias not in url_map:
         return True
-    creation_time , ttl = url_map[alias]["creation_time"],url_map[alias]["ttl"]
+    creation_time, ttl = url_map[alias]["creation_time"], url_map[alias]["ttl"]
     return (time.time() - creation_time) > ttl
 
 def clean_expired_aliases():
@@ -33,73 +32,88 @@ def short_url(request):
     data = request.data
     long_url = data.get("long_url")
     custom_alias = data.get("custom_alias")
-    ttl = data.get("ttl_seconds",DEFAULT_TTL)
+    ttl = data.get("ttl_seconds", DEFAULT_TTL)
 
     if not long_url:
-        return Response({"error": "Long URL is Needed!"},status=status.HTTP_400_BAD_REQUEST)
+        return Response({"error": "Long URL is Needed!"}, status=status.HTTP_400_BAD_REQUEST)
     
     alias = custom_alias or generate_random_alias()
     while alias in url_map:
         alias = generate_random_alias()
 
     url_map[alias] = {
-        "long_url":long_url,
+        "long_url": long_url,
         "ttl": ttl,
-        "creation_time":time.time()
+        "creation_time": time.time(),
+        "access_count": 0,
+        "access_times": []
     }
 
     short_url = SHORT_URL_PREFIX + alias
-    return Response({"short_url":short_url},status=status.HTTP_201_CREATED)
+    return Response({"short_url": short_url}, status=status.HTTP_201_CREATED)
 
 @api_view(['GET'])
-def redirect_to_long_url(request,alias):
+def redirect_to_long_url(request, alias):
     clean_expired_aliases()
 
     if alias not in url_map or check_alias_expired(alias):
-        return Response({"error":"Alias does not exist or is expired"},status=status.HTTP_404_NOT_FOUND)
+        return Response({"error": "Alias does not exist or is expired"}, status=status.HTTP_404_NOT_FOUND)
     
-    url_map[alias].setdefault("access_count",0)
     url_map[alias]["access_count"] += 1
-    url_map[alias].setdefault("access_times",[])
-    url_map[alias]["access_times"].append(time.strftime('%Y-%m-%dT%H:%M:%SZ',time.gmtime()))
+    url_map[alias]["access_times"].append(time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()))
 
     long_url = url_map[alias]["long_url"]
     return HttpResponseRedirect(long_url)
-    
-
 
 @api_view(['GET'])
-def get_analytics(request,alias):
+def get_analytics(request, alias):
     clean_expired_aliases()
 
     if alias not in url_map or check_alias_expired(alias):
-        return Response({"error":"Alias does not exist or is expired"},status=status.HTTP_404_NOT_FOUND)
+        return Response({"error": "Alias does not exist or is expired"}, status=status.HTTP_404_NOT_FOUND)
     
     url_data = url_map[alias]
-    access_times = access_times_map[alias][-10:]
+    access_times = url_data["access_times"][-10:]
     return Response({
-        "alias":alias,
-        "long_url":url_data["long_url"],
-        "access_count":url_data["access_count"],
-        "access_times":access_times,
+        "alias": alias,
+        "long_url": url_data["long_url"],
+        "access_count": url_data["access_count"],
+        "access_times": access_times,
     })
 
-@api_view(['DELETE'])
-def delete_alias(request,alias):
+@api_view(['PUT'])
+def update_alias(request, alias):
     clean_expired_aliases()
 
     if alias not in url_map or check_alias_expired(alias):
-        return Response({"error":"Alias does not exist or is expired"},status=status.HTTP_404_NOT_FOUND)
+        return Response({"error": "Alias does not exist or is expired"}, status=status.HTTP_404_NOT_FOUND)
+    
+    data = request.data
+    new_custom_alias = data.get("custom_alias")
+    new_ttl = data.get("ttl_seconds", DEFAULT_TTL)
+
+    if new_custom_alias:
+        if new_custom_alias in url_map:
+            return Response({"error": "Custom alias already exists"}, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Delete old alias and move data to the new alias
+        url_data = url_map.pop(alias)
+        url_data["ttl"] = new_ttl
+        url_data["creation_time"] = time.time()  # Reset creation time
+        url_map[new_custom_alias] = url_data
+    else:
+        # Update TTL of the existing alias
+        url_map[alias]["ttl"] = new_ttl
+        url_map[alias]["creation_time"] = time.time()  # Reset creation time
+
+    return Response({"message": "Successfully updated"}, status=status.HTTP_200_OK)
+
+@api_view(['DELETE'])
+def delete_alias(request, alias):
+    clean_expired_aliases()
+
+    if alias not in url_map or check_alias_expired(alias):
+        return Response({"error": "Alias does not exist or is expired"}, status=status.HTTP_404_NOT_FOUND)
     
     del url_map[alias]
-    
-    return Response({"message":"Successfully deleted"},status=status.HTTP_200_OK)
-
-    
-    
-
-
-
-
-
-
+    return Response({"message": "Successfully deleted"}, status=status.HTTP_200_OK)
